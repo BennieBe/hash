@@ -1,0 +1,131 @@
+#!/bin/bash
+set -e
+
+BASE="$HOME/hashburst/scripts"
+MONITOR="$BASE/hashburst_monitor.sh"
+WRAPPER="$BASE/hashburst_wrapper.sh"
+DAILY="$BASE/daily_hashburst_check.py"
+LOG_FILE="$BASE/hashburst_monitor.log"
+
+BOT_TOKEN="8457028859:AAHxOB78d5YHGBHpquowDxcahZAdgHEgPPU"
+CHAT_IDS=("1308666019" "1060780677")
+SCREEN_NAME="hashburst_live"
+CHECK_INTERVAL=10
+REFRESH_INTERVAL=60
+
+mkdir -p "$BASE"
+
+echo "🧹 Cleaning old processes..."
+pkill -f hashburst_wrapper.sh || true
+pkill -f hashburst_monitor.sh || true
+screen -ls | grep -E "hashburst_live|hashburst_monitor" | awk '{print $1}' | xargs -r -n1 screen -S {} -X quit || true
+
+(crontab -l 2>/dev/null | grep -v 'daily_hashburst_check.py') | crontab -
+
+cat << 'EOF' > "$WRAPPER"
+#!/bin/bash
+trap "touch ~/.hashburst_manual_stop; exit 0" SIGINT SIGTERM
+hashburst start
+EOF
+chmod +x "$WRAPPER"
+
+cat << 'EOF' > "$MONITOR"
+#!/bin/bash
+
+BOT_TOKEN="__TOKEN__"
+CHAT_IDS=("1308666019" "1060780677")
+SCREEN_NAME="hashburst_live"
+MINER_PROCESS="hashburst_wrapper.sh"
+LOG_FILE="$HOME/hashburst/scripts/hashburst_monitor.log"
+REFRESH_INTERVAL=60
+
+send_telegram(){
+  MSG="$1"
+  DATE_NOW=$(date '+%Y-%m-%d %H:%M:%S')
+  echo "[$DATE_NOW] $MSG" >> "$LOG_FILE"
+  for ID in "${CHAT_IDS[@]}"; do
+    curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+         -d chat_id="$ID" \
+         -d text="[$DATE_NOW] $MSG" >/dev/null 2>&1
+  done
+}
+
+start_hashburst(){
+  if ! screen -list | grep -q "$SCREEN_NAME"; then
+    screen -dmS "$SCREEN_NAME" bash -c "$HOME/hashburst/scripts/hashburst_wrapper.sh | tee -a $LOG_FILE"
+    send_telegram "✅ Hashburst started on $(hostname)"
+  else
+    send_telegram "⚠️ Screen already exists, not starting new one."
+  fi
+}
+
+refresh_hashburst(){
+  if screen -list | grep -q "$SCREEN_NAME"; then
+
+    # Press q
+    screen -S "$SCREEN_NAME" -p 0 -X stuff "q"
+    sleep 4
+
+    # Press ENTER
+    screen -S "$SCREEN_NAME" -p 0 -X stuff $'\n'
+    sleep 4
+
+    # Press 1
+    screen -S "$SCREEN_NAME" -p 0 -X stuff "1"
+    sleep 4
+
+    # Press ENTER
+    screen -S "$SCREEN_NAME" -p 0 -X stuff $'\n'
+
+    send_telegram "🔄 Miner refreshed on $(hostname)"
+
+  else
+    send_telegram "⚠️ Screen missing, restarting miner"
+    start_hashburst
+  fi
+}
+
+send_telegram "🟢 Monitor started on $(hostname)"
+start_hashburst
+
+while true; do
+  if ! pgrep -f "$MINER_PROCESS" >/dev/null; then
+    send_telegram "⚠️ Miner process not running, starting..."
+    start_hashburst
+  fi
+
+  refresh_hashburst
+
+  # Respect refresh interval
+  sleep $REFRESH_INTERVAL
+done
+EOF
+
+sed -i "s|__TOKEN__|$BOT_TOKEN|" "$MONITOR"
+chmod +x "$MONITOR"
+
+cat << 'EOF' > "$DAILY"
+#!/usr/bin/env python3
+import subprocess, requests, socket, time
+
+BOT="__TOKEN__"
+CHAT=["1308666019","1060780677"]
+
+status = "Running" if subprocess.call("pgrep -f hashburst_wrapper.sh", shell=True) == 0 else "Stopped"
+msg = f"{status} on {socket.gethostname()} {time.strftime('%Y-%m-%d %H:%M:%S')}"
+
+for c in CHAT:
+    requests.post(f"https://api.telegram.org/bot{BOT}/sendMessage",
+                  data={"chat_id": c, "text": msg})
+EOF
+
+sed -i "s|__TOKEN__|$BOT_TOKEN|" "$DAILY"
+chmod +x "$DAILY"
+
+CRON="30 6 * * * /usr/bin/python3 $DAILY >> $BASE/cron.log 2>&1"
+(crontab -l 2>/dev/null; echo "$CRON") | sort -u | crontab -
+
+screen -dmS hashburst_monitor bash -c "$MONITOR"
+
+echo "✅ Installed safely in $BASE"
+echo "Files are permanent and cannot be deleted accidentally."

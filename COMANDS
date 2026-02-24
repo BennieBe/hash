@@ -1,0 +1,14 @@
+killall screen
+
+
+
+
+ nano ~/hashburst/install_hashburst.sh
+chmod +x ~/hashburst/install_hashburst.sh
+~/hashburst/install_hashburst.sh
+
+
+screen -ls
+screen -r hashburst_live
+
+
