@@ -1,14 +1,25 @@
+#!/bin/bash
+
+set -euo pipefail
+
+trap 'LAST_OUTPUT=$(eval "$BASH_COMMAND" 2>&1); echo "Error: Command \"${BASH_COMMAND}\" failed with exit code$?"; echo "Error message: ${LAST_OUTPUT}"; exit 1' ERR
+
+if [[ "$EUID" -ne 0 ]]; then
+    echo "This script must be run as root. Please use sudo." >&2
+    exit 1
+fi
+
 machine_type="tow"
 temp_dir="/tmp"
 version="3.2.5"
-install_dir="/usr/local/bin
+install_dir="/usr/local/bin"
 app_url="https://hashburst.io/nodes/repository/releases/$machine_type/$version/application/hashburst_ecosystem_v$version.zip"
 
 
 function install_drivers() {
     if !mokutil --sb-state | grep -q "disabled"; then
         echo "Secure Boot is enabled. Please disable it in the BIOS settings."
-        read -p "Do you want to reboot to BIOS (y/n): " answer
+        read -p "Do you want to reboot to BIOS? (y/n): " answer
         if [[ $answer=~ ^[Yy]$ ]]; then
             echo "Rebooting to BIOS..."
             sudo systemctl reboot --firmware-setup
